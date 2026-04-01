@@ -1,0 +1,233 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Physics Sandbox • Final</title>
+
+<script src="https://www.gstatic.com/firebasejs/10.14.1/firebase-app-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/10.14.1/firebase-database-compat.js"></script>
+
+<style>
+*{margin:0;padding:0;box-sizing:border-box;}
+body{background:#0a0a1f;color:#ddd;font-family:sans-serif;overflow:hidden;}
+canvas{display:block;image-rendering:pixelated;}
+</style>
+</head>
+
+<body>
+<canvas id="canvas"></canvas>
+
+<script>
+// ====================== BASIC ======================
+const canvas = document.getElementById("canvas");
+const ctx = canvas.getContext("2d");
+
+let WIDTH = window.innerWidth;
+let HEIGHT = window.innerHeight;
+canvas.width = WIDTH;
+canvas.height = HEIGHT;
+
+// ====================== STATE ======================
+let particles = [];
+let cloudParticles = [];
+let plants = [];
+let accumulation;
+let iceLayer;
+let activeLightnings = [];
+
+let windX = 0, windY = 0;
+let rainIntensity = 10;
+let snowIntensity = 0;
+let hailIntensity = 0;
+let lightningIntensity = 0;
+let gravity = 0.28;
+let sunlightOn = true;
+
+// 🌍 NEW PHYSICS
+let infiltrationRate = 0.012;
+let evaporationRate = 0.01;
+let flowRate = 0.18;
+let maxSoilCapacity = 120;
+
+// ====================== PARTICLE ======================
+class PixelParticle{
+    constructor(x,y,type){
+        this.x=x; this.y=y; this.type=type;
+        this.vx=(Math.random()-0.5)*2;
+        this.vy= type==="rain"?6+Math.random()*6:
+                 type==="snow"?2+Math.random()*2:
+                 10+Math.random()*6;
+        this.angle=Math.random()*Math.PI*2;
+    }
+}
+
+// ====================== SPAWN ======================
+function spawn(type,count){
+    for(let i=0;i<count;i++){
+        particles.push(new PixelParticle(Math.random()*WIDTH,30,type));
+    }
+}
+
+// ====================== UPDATE PARTICLES ======================
+function updateParticles(){
+    for(let i=particles.length-1;i>=0;i--){
+        let p=particles[i];
+
+        p.vx+=windX*0.1;
+        p.vy+=gravity;
+
+        if(p.type==="snow"){
+            p.vx+=Math.sin(p.angle)*1.5;
+            p.angle+=0.04;
+        }
+
+        p.x+=p.vx;
+        p.y+=p.vy;
+
+        let col=Math.max(0,Math.min(WIDTH-1,Math.floor(p.x)));
+        let ground=HEIGHT-40-(accumulation[col]+iceLayer[col]);
+
+        if(p.y>=ground){
+            if(p.type==="snow"){
+                iceLayer[col]+=0.9;
+            }else{
+                let add=p.type==="rain"?0.35:1.65;
+                accumulation[col]+=add;
+            }
+            particles.splice(i,1);
+            continue;
+        }
+
+        if(p.y>HEIGHT) particles.splice(i,1);
+    }
+}
+
+// ====================== GROUND PHYSICS ======================
+function updateGroundPhysics(){
+    const noPrecip = rainIntensity===0 && snowIntensity===0 && hailIntensity===0;
+
+    // infiltration + melting
+    for(let x=0;x<WIDTH;x++){
+        let water=accumulation[x];
+        let ice=iceLayer[x];
+
+        // melt
+        if(ice>0 && sunlightOn){
+            let melt=0.15+evaporationRate*ice;
+            iceLayer[x]=Math.max(0,ice-melt);
+            accumulation[x]+=melt*0.8;
+        }
+
+        if(water<=0) continue;
+
+        let saturation = water>maxSoilCapacity?0.3:1;
+
+        let loss=infiltrationRate*water*saturation;
+
+        if(sunlightOn && noPrecip){
+            loss+=evaporationRate*water;
+        }
+
+        if(iceLayer[x]>5) loss*=0.2;
+
+        accumulation[x]=Math.max(0,water-loss);
+    }
+
+    // lateral flow
+    for(let x=1;x<WIDTH-1;x++){
+        let current=accumulation[x];
+        if(current<=0) continue;
+
+        let left=accumulation[x-1];
+        let right=accumulation[x+1];
+
+        if(current>left){
+            let flow=(current-left)*flowRate*0.5;
+            accumulation[x]-=flow;
+            accumulation[x-1]+=flow;
+        }
+
+        if(current>right){
+            let flow=(current-right)*flowRate*0.5;
+            accumulation[x]-=flow;
+            accumulation[x+1]+=flow;
+        }
+    }
+}
+
+// ====================== DRAW ======================
+function draw(){
+    ctx.fillStyle="#0a0a1f";
+    ctx.fillRect(0,0,WIDTH,HEIGHT);
+
+    // ground
+    ctx.fillStyle="#3d2c1f";
+    ctx.fillRect(0,HEIGHT-40,WIDTH,40);
+
+    // terrain
+    for(let x=0;x<WIDTH;x+=2){
+        let water=accumulation[x];
+        let ice=iceLayer[x];
+        let total=water+ice;
+
+        if(total>0){
+            if(ice>2) ctx.fillStyle="#eef6ff";
+            else ctx.fillStyle="#ccddee";
+
+            ctx.fillRect(x,HEIGHT-40-total,2,total);
+        }
+    }
+
+    // particles
+    for(let p of particles){
+        if(p.type==="rain"){
+            ctx.fillStyle="#4488ee";
+            ctx.fillRect(p.x,p.y,2,10);
+        }
+        else if(p.type==="snow"){
+            ctx.fillStyle="#fff";
+            ctx.fillRect(p.x,p.y,3,3);
+        }
+        else{
+            ctx.fillStyle="#99ddff";
+            ctx.fillRect(p.x,p.y,4,4);
+        }
+    }
+}
+
+// ====================== LOOP ======================
+function loop(){
+    if(rainIntensity>0) spawn("rain",rainIntensity);
+    if(snowIntensity>0) spawn("snow",snowIntensity);
+    if(hailIntensity>0) spawn("hail",hailIntensity);
+
+    updateParticles();
+    updateGroundPhysics();
+
+    draw();
+
+    requestAnimationFrame(loop);
+}
+
+// ====================== INIT ======================
+function start(){
+    accumulation=new Float32Array(WIDTH).fill(0);
+    iceLayer=new Float32Array(WIDTH).fill(0);
+    loop();
+}
+
+start();
+
+// resize
+window.addEventListener("resize",()=>{
+    WIDTH=window.innerWidth;
+    HEIGHT=window.innerHeight;
+    canvas.width=WIDTH;
+    canvas.height=HEIGHT;
+    accumulation=new Float32Array(WIDTH).fill(0);
+    iceLayer=new Float32Array(WIDTH).fill(0);
+});
+</script>
+</body>
+</html>

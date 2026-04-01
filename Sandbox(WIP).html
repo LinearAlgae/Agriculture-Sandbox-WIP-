@@ -1,0 +1,935 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Physics Sandbox • Rain & Snow</title>
+    <script src="https://www.gstatic.com/firebasejs/10.14.1/firebase-app-compat.js"></script>
+    <script src="https://www.gstatic.com/firebasejs/10.14.1/firebase-database-compat.js"></script>
+    <style>
+        * { margin:0; padding:0; box-sizing:border-box; }
+        body {
+            background: #0a0a1f;
+            color: #ddd;
+            font-family: system-ui, -apple-system, BlinkMacSystemFont, sans-serif;
+            overflow: hidden;
+        }
+        canvas {
+            display: block;
+            image-rendering: pixelated;
+        }
+        #ui {
+            position: absolute;
+            top: 15px;
+            left: 15px;
+            background: rgba(20, 25, 40, 0.95);
+            border: 2px solid #445577;
+            padding: 20px;
+            border-radius: 6px;
+            box-shadow: 0 4px 15px rgba(0, 0, 0, 0.6);
+            width: 340px;
+            z-index: 100;
+            user-select: none;
+        }
+        .controls {
+            display: grid;
+            gap: 16px;
+        }
+        label {
+            display: block;
+            font-size: 13px;
+            margin-bottom: 6px;
+            color: #aabbcc;
+            font-weight: 500;
+        }
+        input[type="range"] {
+            width: 100%;
+            accent-color: #5588cc;
+        }
+        button {
+            background: #223344;
+            color: #fff;
+            border: 2px solid #445577;
+            padding: 11px 16px;
+            font-size: 13px;
+            cursor: pointer;
+            border-radius: 4px;
+            transition: all 0.2s ease;
+        }
+        button:hover {
+            background: #445577;
+        }
+        .row {
+            display: flex;
+            gap: 8px;
+        }
+        .value {
+            font-size: 13px;
+            background: #1a2233;
+            padding: 6px 10px;
+            border: 2px solid #445577;
+            min-width: 50px;
+            text-align: center;
+            color: #ddd;
+        }
+        #status {
+            position: absolute;
+            bottom: 15px;
+            left: 15px;
+            background: rgba(20, 25, 40, 0.9);
+            border: 2px solid #445577;
+            padding: 8px 14px;
+            font-size: 13px;
+            border-radius: 4px;
+            box-shadow: 0 4px 12px rgba(0, 0, 0, 0.5);
+            color: #aabbcc;
+        }
+        .tooltip {
+            position: absolute;
+            bottom: 15px;
+            right: 15px;
+            background: #1a2233;
+            color: #ccddee;
+            padding: 10px 14px;
+            font-size: 12px;
+            border: 2px solid #445577;
+            max-width: 280px;
+            line-height: 1.4;
+        }
+        #host-badge {
+            background: #ff8800;
+            color: #000;
+            font-size: 10px;
+            padding: 2px 8px;
+            border-radius: 12px;
+            display: inline-block;
+            margin-left: 8px;
+        }
+    </style>
+</head>
+<body>
+    <canvas id="canvas"></canvas>
+
+    <!-- Simplified UI -->
+    <div id="ui">
+        <div class="controls">
+            <!-- Rain -->
+            <div>
+                <label>RAIN INTENSITY <span id="rain-val" class="value">0</span></label>
+                <input type="range" id="rain-slider" min="0" max="35" value="0" step="1">
+            </div>
+
+            <!-- Snow -->
+            <div>
+                <label>SNOW INTENSITY <span id="snow-val" class="value">0</span></label>
+                <input type="range" id="snow-slider" min="0" max="25" value="0" step="1">
+            </div>
+
+            <!-- Hail -->
+            <div>
+                <label>HAIL INTENSITY <span id="hail-val" class="value">0</span></label>
+                <input type="range" id="hail-slider" min="0" max="20" value="0" step="1">
+            </div>
+
+            <!-- Lightning -->
+            <div>
+                <label>LIGHTNING INTENSITY <span id="lightning-val" class="value">0</span></label>
+                <input type="range" id="lightning-slider" min="0" max="15" value="0" step="1">
+            </div>
+
+            <!-- Cloud disintegrate -->
+            <div>
+                <label>CLOUD DISSOLVE SPEED <span id="cloud-dissolve-val" class="value">1.2</span></label>
+                <input type="range" id="cloud-dissolve-slider" min="0" max="5" value="1.2" step="0.1">
+            </div>
+
+            <!-- Wind -->
+            <div>
+                <label>WIND X (←→) <span id="windx-val" class="value">0</span></label>
+                <input type="range" id="windx-slider" min="-18" max="18" value="0" step="0.5">
+            </div>
+            <div>
+                <label>WIND Y (↑↓) <span id="windy-val" class="value">0</span></label>
+                <input type="range" id="windy-slider" min="-8" max="8" value="0" step="0.5">
+            </div>
+
+            <!-- Sunlight + Clear -->
+            <div class="row">
+                <button id="sun-btn" style="flex:1;">☀️ Sunlight ON</button>
+                <button id="clear-btn" style="flex:1;">🗑️ Clear All</button>
+            </div>
+
+            <!-- Mouse mode -->
+            <div>
+                <label>MOUSE INTERACTION</label>
+                <div class="row">
+                    <button id="mode-push" style="flex:1;">PUSH</button>
+                    <button id="mode-pull" style="flex:1;">PULL</button>
+                    <button id="mode-erase" style="flex:1;">ERASE</button>
+                </div>
+            </div>
+
+            <div style="font-size:12px; color:#aabbcc; text-align:center; margin-top:10px;">
+                MULTIPLAYER ENABLED • Share this page with friends<br>
+                <span id="players-online" style="color:#88bb88;">0 others online</span>
+                <span id="host-badge" style="display:none;">YOU ARE HOST</span>
+            </div>
+        </div>
+    </div>
+
+    <div id="status">
+        Connected • Rain & Snow Physics Sandbox
+    </div>
+
+    <div class="tooltip">
+        Drag mouse to push/pull/erase particles<br>
+        Everything is pure pixel art • Snow = cute white pixels<br>
+        Rain = deep blue • Hail = bright blue • Clouds = same pixel style as other particles<br>
+        Clouds build up with precipitation and dissolve with sun + no rain
+    </div>
+
+    <script>
+        // ====================== FIREBASE SETUP ======================
+        const firebaseConfig = {
+            apiKey: "AIzaSyXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX",
+            authDomain: "YOUR-PROJECT-ID.firebaseapp.com",
+            databaseURL: "https://YOUR-PROJECT-ID-default-rtdb.firebaseio.com",
+            projectId: "YOUR-PROJECT-ID",
+            storageBucket: "YOUR-PROJECT-ID.appspot.com",
+            messagingSenderId: "1234567890",
+            appId: "1:1234567890:web:XXXXXXXXXXXXXXXXXXXXXX"
+        };
+
+        let database;
+        let worldRef;
+        let playersRef;
+        let myPlayerRef;
+        let playerId = "player_" + Math.floor(Math.random() * 999999);
+        let myColor = "#" + Math.floor(Math.random() * 16777215).toString(16).padStart(6, "0");
+        let otherPlayers = {};
+        let isHost = false;
+
+        function initFirebase() {
+            if (!firebaseConfig.apiKey.includes("XXXXXXXXXXXXXXXX")) {
+                firebase.initializeApp(firebaseConfig);
+                database = firebase.database();
+                
+                const roomRef = database.ref("pixelstorm/room1");
+                
+                worldRef = roomRef.child("world");
+                playersRef = roomRef.child("players");
+                
+                worldRef.on("value", (snapshot) => {
+                    const data = snapshot.val();
+                    if (!data) return;
+                    
+                    windX = data.windX !== undefined ? data.windX : windX;
+                    windY = data.windY !== undefined ? data.windY : windY;
+                    rainIntensity = data.rainIntensity !== undefined ? data.rainIntensity : rainIntensity;
+                    snowIntensity = data.snowIntensity !== undefined ? data.snowIntensity : snowIntensity;
+                    hailIntensity = data.hailIntensity !== undefined ? data.hailIntensity : hailIntensity;
+                    lightningIntensity = data.lightningIntensity !== undefined ? data.lightningIntensity : lightningIntensity;
+                    cloudDisintegrateSpeed = data.cloudDisintegrateSpeed !== undefined ? data.cloudDisintegrateSpeed : cloudDisintegrateSpeed;
+                    sunlightOn = data.sunlightOn !== undefined ? data.sunlightOn : sunlightOn;
+                    
+                    document.getElementById("rain-slider").value = rainIntensity;
+                    document.getElementById("snow-slider").value = snowIntensity;
+                    document.getElementById("hail-slider").value = hailIntensity;
+                    document.getElementById("lightning-slider").value = lightningIntensity;
+                    document.getElementById("cloud-dissolve-slider").value = cloudDisintegrateSpeed;
+                    document.getElementById("windx-slider").value = windX;
+                    document.getElementById("windy-slider").value = windY;
+                    
+                    document.getElementById("rain-val").textContent = Math.round(rainIntensity);
+                    document.getElementById("snow-val").textContent = Math.round(snowIntensity);
+                    document.getElementById("hail-val").textContent = Math.round(hailIntensity);
+                    document.getElementById("lightning-val").textContent = Math.round(lightningIntensity);
+                    document.getElementById("cloud-dissolve-val").textContent = cloudDisintegrateSpeed.toFixed(1);
+                    document.getElementById("windx-val").textContent = windX.toFixed(1);
+                    document.getElementById("windy-val").textContent = windY.toFixed(1);
+                    
+                    if (data.cleared && data.cleared > lastCleared) {
+                        accumulation.fill(0);
+                        plants = [];
+                        activeLightnings = [];
+                        cloudParticles = [];
+                        lastCleared = data.cleared;
+                    }
+                });
+                
+                myPlayerRef = playersRef.child(playerId);
+                myPlayerRef.onDisconnect().remove();
+                
+                playersRef.once("value", (snap) => {
+                    const existing = snap.val();
+                    if (!existing || Object.keys(existing).length === 0) {
+                        isHost = true;
+                        document.getElementById("host-badge").style.display = "inline-block";
+                        document.getElementById("status").innerHTML = "You are the HOST • Full control";
+                    }
+                });
+                
+                setInterval(() => {
+                    if (myPlayerRef) {
+                        myPlayerRef.update({
+                            x: mouse.x,
+                            y: mouse.y,
+                            mode: mouseMode,
+                            color: myColor,
+                            timestamp: Date.now()
+                        });
+                    }
+                }, 40);
+                
+                playersRef.on("value", (snapshot) => {
+                    const data = snapshot.val();
+                    otherPlayers = {};
+                    if (data) {
+                        Object.keys(data).forEach(id => {
+                            if (id !== playerId) otherPlayers[id] = data[id];
+                        });
+                    }
+                    document.getElementById("players-online").textContent = 
+                        Object.keys(otherPlayers).length + " others online";
+                });
+                
+                return true;
+            } else {
+                document.getElementById("status").innerHTML = "Single-player mode (Firebase not configured yet)";
+                return false;
+            }
+        }
+
+        // ====================== PHYSICS SANDBOX ======================
+        const canvas = document.getElementById("canvas");
+        const ctx = canvas.getContext("2d", { alpha: true });
+        
+        let WIDTH = window.innerWidth;
+        let HEIGHT = window.innerHeight;
+        canvas.width = WIDTH;
+        canvas.height = HEIGHT;
+        ctx.imageSmoothingEnabled = false;
+        
+        let particles = [];           // rain, snow, hail
+        let cloudParticles = [];      // pixel clouds (same style as other particles)
+        let plants = [];
+        let accumulation = null;
+        let activeLightnings = [];
+        let flashAlpha = 0;
+        
+        let windX = 0;
+        let windY = 0;
+        let rainIntensity = 0;
+        let snowIntensity = 0;
+        let hailIntensity = 0;
+        let lightningIntensity = 0;
+        let cloudDisintegrateSpeed = 1.2;   // ← new variable as requested
+        let gravity = 0.28;
+        let sunlightOn = true;
+        let lastCleared = 0;
+        
+        let mouse = { x: WIDTH/2, y: HEIGHT/2, down: false };
+        let mouseMode = "push";
+        
+        let audioCtx = null;
+        
+        class PixelParticle {
+            constructor(x, y, type = "rain") {
+                this.x = x;
+                this.y = y;
+                this.type = type;
+                this.vx = type === "rain" ? (Math.random() * 2 - 1) : 
+                          type === "hail" ? (Math.random() * 1.5 - 0.75) : 0;
+                this.vy = type === "rain" ? (6 + Math.random() * 8) : 
+                          type === "snow" ? (1.5 + Math.random() * 2.5) : 
+                          (10 + Math.random() * 8);
+                this.size = type === "rain" ? 2 : 
+                            type === "snow" ? 5 : 4;
+                this.angle = Math.random() * Math.PI * 2;
+                this.swaySpeed = type === "snow" ? (0.03 + Math.random() * 0.05) : 
+                                  type === "hail" ? 0.08 : 0;
+            }
+        }
+        
+        class Plant {
+            constructor(x) {
+                this.x = x;
+                this.height = 12 + Math.random() * 8;
+                this.health = 100;
+                this.age = 0;
+                this.maxHeight = 55 + Math.random() * 45;
+            }
+        }
+        
+        class Lightning {
+            constructor(strikeX) {
+                this.points = [];
+                this.life = 14;
+                let x = strikeX;
+                let y = 55 + Math.random() * 90;
+                this.points.push({x: x, y: y});
+                while (y < HEIGHT - 45) {
+                    x += (Math.random() * 68 - 34);
+                    y += 38 + Math.random() * 42;
+                    this.points.push({x: x, y: y});
+                }
+                if (Math.random() > 0.5) {
+                    const branchStart = Math.floor(this.points.length * 0.4);
+                    let bx = this.points[branchStart].x;
+                    let by = this.points[branchStart].y;
+                    const branchPoints = [{x: bx, y: by}];
+                    for (let i = 0; i < 5; i++) {
+                        bx += (Math.random() * 42 - 21);
+                        by += 22 + Math.random() * 28;
+                        branchPoints.push({x: bx, y: by});
+                    }
+                    this.branch = branchPoints;
+                }
+            }
+        }
+        
+        function getRandomCloudSpawn() {
+            if (cloudParticles.length > 0) {
+                const c = cloudParticles[Math.floor(Math.random() * cloudParticles.length)];
+                return {
+                    x: c.x + (Math.random() - 0.5) * c.size * 1.4,
+                    y: c.y + c.size * 0.6
+                };
+            }
+            return { x: Math.random() * WIDTH, y: 30 + Math.random() * 80 };
+        }
+        
+        function spawnRain(count) {
+            for (let i = 0; i < count; i++) {
+                const spawn = getRandomCloudSpawn();
+                particles.push(new PixelParticle(spawn.x, spawn.y, "rain"));
+            }
+        }
+        
+        function spawnSnow(count) {
+            for (let i = 0; i < count; i++) {
+                const spawn = getRandomCloudSpawn();
+                particles.push(new PixelParticle(spawn.x, spawn.y, "snow"));
+            }
+        }
+        
+        function spawnHail(count) {
+            for (let i = 0; i < count; i++) {
+                const spawn = getRandomCloudSpawn();
+                particles.push(new PixelParticle(spawn.x, spawn.y - 10, "hail"));
+            }
+        }
+        
+        function triggerLightning() {
+            let strikeX = Math.random() * WIDTH;
+            if (cloudParticles.length > 0) {
+                const c = cloudParticles[Math.floor(Math.random() * cloudParticles.length)];
+                strikeX = c.x;
+            }
+            activeLightnings.push(new Lightning(strikeX));
+            flashAlpha = 0.78;
+            for (let i = plants.length - 1; i >= 0; i--) {
+                if (Math.abs(plants[i].x - strikeX) < 95) plants[i].health -= 24;
+            }
+            setTimeout(playThunder, 220 + Math.random() * 680);
+        }
+        
+        function playThunder() {
+            if (!audioCtx) audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+            try {
+                const duration = 2.8;
+                const buffer = audioCtx.createBuffer(1, audioCtx.sampleRate * duration, audioCtx.sampleRate);
+                const output = buffer.getChannelData(0);
+                for (let i = 0; i < output.length; i++) output[i] = Math.random() * 2 - 1;
+                const noise = audioCtx.createBufferSource();
+                noise.buffer = buffer;
+                const filter = audioCtx.createBiquadFilter();
+                filter.type = "lowpass";
+                filter.frequency.setValueAtTime(1200, audioCtx.currentTime);
+                filter.frequency.exponentialRampToValueAtTime(60, audioCtx.currentTime + duration);
+                const gain = audioCtx.createGain();
+                gain.gain.setValueAtTime(1.4, audioCtx.currentTime);
+                gain.gain.exponentialRampToValueAtTime(0.001, audioCtx.currentTime + duration);
+                noise.connect(filter); filter.connect(gain); gain.connect(audioCtx.destination);
+                noise.start();
+                const osc = audioCtx.createOscillator();
+                osc.frequency.setValueAtTime(180, audioCtx.currentTime);
+                const crackGain = audioCtx.createGain();
+                crackGain.gain.setValueAtTime(1.1, audioCtx.currentTime);
+                crackGain.gain.exponentialRampToValueAtTime(0.001, audioCtx.currentTime + 0.18);
+                osc.connect(crackGain); crackGain.connect(audioCtx.destination);
+                osc.start(); osc.stop(audioCtx.currentTime + 0.25);
+            } catch(e) {}
+        }
+        
+        function updateCloudParticles() {
+            const hasPrecip = rainIntensity > 0 || snowIntensity > 0 || hailIntensity > 0;
+            
+            for (let i = cloudParticles.length - 1; i >= 0; i--) {
+                const c = cloudParticles[i];
+                
+                c.vx += windX * 0.45;
+                c.vy += windY * 0.15;
+                c.x += c.vx;
+                c.y += c.vy;
+                c.vx *= 0.96;
+                c.vy *= 0.98;
+                
+                if (c.x < -80) c.x = WIDTH + 80;
+                if (c.x > WIDTH + 80) c.x = -80;
+                
+                // Disintegrate when sun is strong and no precipitation
+                if (!hasPrecip && sunlightOn) {
+                    c.life -= cloudDisintegrateSpeed;
+                } else if (hasPrecip) {
+                    c.life = Math.min(c.life + 0.8, 220); // reinforce clouds
+                }
+                
+                if (c.life <= 0 || c.y > HEIGHT + 30) {
+                    cloudParticles.splice(i, 1);
+                }
+            }
+        }
+        
+        function updateParticles() {
+            for (let i = particles.length - 1; i >= 0; i--) {
+                const p = particles[i];
+                
+                p.vx += windX * 0.12;
+                p.vy += windY * 0.08;
+                p.vy += gravity;
+                
+                if (p.type === "snow" || p.type === "hail") {
+                    p.vx += Math.sin(p.angle) * (p.type === "hail" ? 0.8 : 1.8);
+                    p.angle += p.swaySpeed;
+                }
+                
+                if (mouse.down) {
+                    const dx = mouse.x - p.x;
+                    const dy = mouse.y - p.y;
+                    const dist = Math.sqrt(dx * dx + dy * dy);
+                    if (dist < 120 && dist > 0) {
+                        const force = (120 - dist) / 120;
+                        if (mouseMode === "push") {
+                            p.vx -= dx / dist * force * 9;
+                            p.vy -= dy / dist * force * 9;
+                        } else if (mouseMode === "pull") {
+                            p.vx += dx / dist * force * 7;
+                            p.vy += dy / dist * force * 7;
+                        } else if (mouseMode === "erase" && dist < 70) {
+                            particles.splice(i, 1);
+                            continue;
+                        }
+                    }
+                }
+                
+                p.x += p.vx;
+                p.y += p.vy;
+                
+                const col = Math.max(0, Math.min(WIDTH - 1, Math.floor(p.x)));
+                const groundSurface = HEIGHT - 40 - (accumulation[col] || 0);
+                
+                if (p.y >= groundSurface) {
+                    const addAmount = p.type === "rain" ? 0.35 : p.type === "snow" ? 1.15 : 1.65;
+                    accumulation[col] = Math.min((accumulation[col] || 0) + addAmount, 180);
+                    if (p.type === "hail") {
+                        for (let j = plants.length - 1; j >= 0; j--) {
+                            if (Math.abs(plants[j].x - p.x) < 28) plants[j].health -= 15;
+                        }
+                    }
+                    particles.splice(i, 1);
+                    continue;
+                }
+                
+                if (p.y > HEIGHT + 50 || p.x < -50 || p.x > WIDTH + 50) {
+                    particles.splice(i, 1);
+                }
+            }
+        }
+        
+        function updatePlants() {
+            for (let i = plants.length - 1; i >= 0; i--) {
+                const pl = plants[i];
+                pl.age++;
+                const col = Math.floor(pl.x);
+                if ((accumulation[col] || 0) > pl.height + 20) pl.health -= 4;
+                
+                const isGoodWeather = rainIntensity > 3 || (snowIntensity > 2 && sunlightOn);
+                if (isGoodWeather && pl.health > 25) {
+                    pl.height = Math.min(pl.height + (rainIntensity * 0.08 + 0.3), pl.maxHeight);
+                    pl.health = Math.min(pl.health + 3, 100);
+                } else {
+                    pl.health -= 0.7;
+                }
+                if (Math.abs(windX) > 9) pl.health -= 0.5;
+                if (hailIntensity > 8) pl.health -= 0.8;
+                if (pl.health <= 0 || pl.height < 6) plants.splice(i, 1);
+            }
+        }
+        
+        function drawBackground() {
+            const grad = ctx.createLinearGradient(0, 0, 0, HEIGHT);
+            grad.addColorStop(0, sunlightOn ? "#112244" : "#0a0a1f");
+            grad.addColorStop(1, "#05050f");
+            ctx.fillStyle = grad;
+            ctx.fillRect(0, 0, WIDTH, HEIGHT);
+            
+            const hasPrecipitation = rainIntensity > 0 || snowIntensity > 0 || hailIntensity > 0;
+            if (!hasPrecipitation) {
+                const celestialX = Math.floor(WIDTH * 0.78);
+                const celestialY = Math.floor(HEIGHT * 0.22);
+                if (sunlightOn) {
+                    ctx.fillStyle = "#ffee88";
+                    ctx.fillRect(celestialX - 18, celestialY - 18, 36, 36);
+                } else {
+                    ctx.fillStyle = "#ddddee";
+                    ctx.fillRect(celestialX - 16, celestialY - 16, 32, 32);
+                }
+            }
+            
+            if (flashAlpha > 0.01) {
+                ctx.fillStyle = `rgba(255, 255, 255, ${flashAlpha})`;
+                ctx.fillRect(0, 0, WIDTH, HEIGHT);
+                flashAlpha *= 0.82;
+            }
+        }
+        
+        function drawCloudParticles() {
+            ctx.fillStyle = "#e0e0f0";
+            for (let c of cloudParticles) {
+                const sz = Math.floor(c.size);
+                const px = Math.floor(c.x - sz / 2);
+                const py = Math.floor(c.y - sz / 2);
+                ctx.fillRect(px, py, sz, sz);
+                // tiny extra pixel fluff for cloud look
+                ctx.fillRect(px - 2, py + 1, 2, 2);
+                ctx.fillRect(px + sz, py + 2, 2, 2);
+            }
+        }
+        
+        function drawLightnings() {
+            ctx.shadowBlur = 12;
+            ctx.shadowColor = "#ffffff";
+            for (let i = activeLightnings.length - 1; i >= 0; i--) {
+                const bolt = activeLightnings[i];
+                ctx.strokeStyle = "#ffffff";
+                ctx.lineWidth = 3;
+                ctx.beginPath();
+                ctx.moveTo(Math.floor(bolt.points[0].x), Math.floor(bolt.points[0].y));
+                for (let j = 1; j < bolt.points.length; j++) {
+                    ctx.lineTo(Math.floor(bolt.points[j].x), Math.floor(bolt.points[j].y));
+                }
+                ctx.stroke();
+                ctx.lineWidth = 1;
+                ctx.stroke();
+                if (bolt.branch) {
+                    ctx.beginPath();
+                    ctx.moveTo(Math.floor(bolt.branch[0].x), Math.floor(bolt.branch[0].y));
+                    for (let j = 1; j < bolt.branch.length; j++) {
+                        ctx.lineTo(Math.floor(bolt.branch[j].x), Math.floor(bolt.branch[j].y));
+                    }
+                    ctx.stroke();
+                }
+                bolt.life--;
+                if (bolt.life <= 0) activeLightnings.splice(i, 1);
+            }
+            ctx.shadowBlur = 0;
+        }
+        
+        function drawGroundAndTerrain() {
+            ctx.fillStyle = "#3d2c1f";
+            ctx.fillRect(0, HEIGHT - 40, WIDTH, 40);
+            
+            ctx.fillStyle = "#ccddee";
+            for (let x = 0; x < WIDTH; x += 3) {
+                const h = Math.floor(accumulation[x] || 0);
+                if (h > 1) {
+                    ctx.fillRect(x, HEIGHT - 40 - h, 3, h + 2);
+                }
+            }
+        }
+        
+        function drawPlants() {
+            for (let pl of plants) {
+                const col = Math.floor(pl.x);
+                const baseY = HEIGHT - 40 - (accumulation[col] || 0);
+                const topY = baseY - pl.height;
+                
+                ctx.fillStyle = "#0a5a0a";
+                ctx.fillRect(Math.floor(pl.x) - 2, topY, 5, pl.height);
+                
+                ctx.fillStyle = "#0a8a2a";
+                ctx.fillRect(Math.floor(pl.x) - 14, Math.floor(baseY - pl.height * 0.4) - 3, 14, 7);
+                ctx.fillRect(Math.floor(pl.x) + 1, Math.floor(baseY - pl.height * 0.4) - 3, 14, 7);
+                
+                ctx.fillRect(Math.floor(pl.x) - 10, Math.floor(topY + 10) - 3, 11, 6);
+                ctx.fillRect(Math.floor(pl.x) + 1, Math.floor(topY + 10) - 3, 11, 6);
+                
+                ctx.fillStyle = "#0a9a1a";
+                ctx.fillRect(Math.floor(pl.x) - 4, Math.floor(topY) - 6, 8, 12);
+            }
+        }
+        
+        function drawParticles() {
+            for (let p of particles) {
+                const px = Math.floor(p.x);
+                const py = Math.floor(p.y);
+                
+                if (p.type === "rain") {
+                    ctx.fillStyle = "#4488ee";           // deep blue rain
+                    ctx.fillRect(px, py, 2, 10);
+                } 
+                else if (p.type === "snow") {
+                    ctx.fillStyle = "#ffffff";           // cute white snow
+                    const s = Math.floor(p.size);
+                    ctx.fillRect(px - 1, py - 1, 3, 3);
+                    ctx.fillRect(px - 3, py, 7, 1);
+                    ctx.fillRect(px, py - 3, 1, 7);
+                    ctx.fillRect(px - 2, py - 2, 1, 1);
+                    ctx.fillRect(px + 2, py - 2, 1, 1);
+                    ctx.fillRect(px - 2, py + 2, 1, 1);
+                    ctx.fillRect(px + 2, py + 2, 1, 1);
+                } 
+                else if (p.type === "hail") {
+                    ctx.fillStyle = "#99ddff";           // bright blue hail
+                    ctx.fillRect(px - 2, py - 2, 5, 5);
+                }
+            }
+        }
+        
+        function drawOtherCursors() {
+            for (let id in otherPlayers) {
+                const p = otherPlayers[id];
+                if (!p || Date.now() - p.timestamp > 3000) continue;
+                
+                ctx.save();
+                ctx.translate(Math.floor(p.x), Math.floor(p.y));
+                ctx.shadowBlur = 12;
+                ctx.shadowColor = p.color || "#ff00ff";
+                
+                let emoji = "👊";
+                if (p.mode === "pull") emoji = "🌀";
+                else if (p.mode === "erase") emoji = "✂️";
+                
+                ctx.fillStyle = p.color || "#ff00ff";
+                ctx.font = "26px system-ui";
+                ctx.fillText(emoji, -13, 13);
+                ctx.restore();
+            }
+        }
+        
+        function gameLoop() {
+            // Build cloud pixels when there is any precipitation
+            const precipTotal = rainIntensity + snowIntensity + hailIntensity;
+            if (precipTotal > 0) {
+                const buildRate = Math.floor(precipTotal / 6) + 2;
+                for (let i = 0; i < buildRate; i++) {
+                    cloudParticles.push({
+                        x: Math.random() * WIDTH,
+                        y: 20 + Math.random() * 90,
+                        vx: (Math.random() - 0.5) * 3,
+                        vy: 0.4,
+                        life: 140 + Math.random() * 60,
+                        size: 7 + Math.random() * 9
+                    });
+                }
+            }
+            
+            // Spawn weather from clouds
+            if (rainIntensity > 0) spawnRain(Math.floor(rainIntensity / 3) + 2);
+            if (snowIntensity > 0) spawnSnow(Math.floor(snowIntensity / 3) + 1);
+            if (hailIntensity > 0) spawnHail(Math.floor(hailIntensity / 3.5) + 1);
+            
+            if (lightningIntensity > 0 && Math.random() < lightningIntensity / 280) {
+                triggerLightning();
+            }
+            
+            updateCloudParticles();
+            updateParticles();
+            updatePlants();
+            
+            if (rainIntensity > 5 && plants.length < 28 && Math.random() < 0.018) {
+                plants.push(new Plant(Math.random() * WIDTH));
+            }
+            
+            drawBackground();
+            drawCloudParticles();
+            drawLightnings();
+            drawGroundAndTerrain();
+            drawPlants();
+            drawParticles();
+            drawOtherCursors();
+            
+            if (particles.length > 2800) particles.splice(0, particles.length - 2200);
+            
+            requestAnimationFrame(gameLoop);
+        }
+        
+        // ====================== INPUT & UI ======================
+        function setupUI() {
+            const rainSlider = document.getElementById("rain-slider");
+            const snowSlider = document.getElementById("snow-slider");
+            const hailSlider = document.getElementById("hail-slider");
+            const lightningSlider = document.getElementById("lightning-slider");
+            const cloudDissolveSlider = document.getElementById("cloud-dissolve-slider");
+            const windxSlider = document.getElementById("windx-slider");
+            const windySlider = document.getElementById("windy-slider");
+            
+            const updateWorld = () => {
+                if (worldRef) {
+                    worldRef.update({
+                        windX: windX,
+                        windY: windY,
+                        rainIntensity: rainIntensity,
+                        snowIntensity: snowIntensity,
+                        hailIntensity: hailIntensity,
+                        lightningIntensity: lightningIntensity,
+                        cloudDisintegrateSpeed: cloudDisintegrateSpeed,
+                        sunlightOn: sunlightOn
+                    });
+                }
+            };
+            
+            rainSlider.addEventListener("input", () => {
+                rainIntensity = parseFloat(rainSlider.value);
+                document.getElementById("rain-val").textContent = Math.round(rainIntensity);
+                updateWorld();
+            });
+            
+            snowSlider.addEventListener("input", () => {
+                snowIntensity = parseFloat(snowSlider.value);
+                document.getElementById("snow-val").textContent = Math.round(snowIntensity);
+                updateWorld();
+            });
+            
+            hailSlider.addEventListener("input", () => {
+                hailIntensity = parseFloat(hailSlider.value);
+                document.getElementById("hail-val").textContent = Math.round(hailIntensity);
+                updateWorld();
+            });
+            
+            lightningSlider.addEventListener("input", () => {
+                lightningIntensity = parseFloat(lightningSlider.value);
+                document.getElementById("lightning-val").textContent = Math.round(lightningIntensity);
+                updateWorld();
+            });
+            
+            cloudDissolveSlider.addEventListener("input", () => {
+                cloudDisintegrateSpeed = parseFloat(cloudDissolveSlider.value);
+                document.getElementById("cloud-dissolve-val").textContent = cloudDisintegrateSpeed.toFixed(1);
+                updateWorld();
+            });
+            
+            windxSlider.addEventListener("input", () => {
+                windX = parseFloat(windxSlider.value);
+                document.getElementById("windx-val").textContent = windX.toFixed(1);
+                updateWorld();
+            });
+            
+            windySlider.addEventListener("input", () => {
+                windY = parseFloat(windySlider.value);
+                document.getElementById("windy-val").textContent = windY.toFixed(1);
+                updateWorld();
+            });
+            
+            document.getElementById("sun-btn").addEventListener("click", () => {
+                sunlightOn = !sunlightOn;
+                const btn = document.getElementById("sun-btn");
+                btn.textContent = sunlightOn ? "☀️ Sunlight ON" : "🌙 Moonlight ON";
+                updateWorld();
+            });
+            
+            document.getElementById("clear-btn").addEventListener("click", () => {
+                particles = [];
+                cloudParticles = [];
+                accumulation.fill(0);
+                plants = [];
+                activeLightnings = [];
+                if (worldRef) worldRef.update({ cleared: Date.now() });
+            });
+            
+            document.getElementById("mode-push").addEventListener("click", () => mouseMode = "push");
+            document.getElementById("mode-pull").addEventListener("click", () => mouseMode = "pull");
+            document.getElementById("mode-erase").addEventListener("click", () => mouseMode = "erase");
+            
+            canvas.addEventListener("mousedown", () => { mouse.down = true; });
+            canvas.addEventListener("mouseup", () => { mouse.down = false; });
+            canvas.addEventListener("mouseleave", () => { mouse.down = false; });
+            
+            canvas.addEventListener("mousemove", e => {
+                mouse.x = e.clientX;
+                mouse.y = e.clientY;
+            });
+            
+            canvas.addEventListener("touchstart", e => {
+                mouse.down = true;
+                mouse.x = e.touches[0].clientX;
+                mouse.y = e.touches[0].clientY;
+            });
+            canvas.addEventListener("touchmove", e => {
+                mouse.x = e.touches[0].clientX;
+                mouse.y = e.touches[0].clientY;
+            });
+            canvas.addEventListener("touchend", () => { mouse.down = false; });
+            
+            window.addEventListener("keydown", e => {
+                if (e.key === "r" || e.key === "R") rainIntensity = Math.min(35, rainIntensity + 8);
+                if (e.key === "s" || e.key === "S") snowIntensity = Math.min(25, snowIntensity + 6);
+                if (e.key === "h" || e.key === "H") hailIntensity = Math.min(20, hailIntensity + 5);
+                if (e.key === "l" || e.key === "L") lightningIntensity = Math.min(15, lightningIntensity + 4);
+                if (e.key === "c" || e.key === "C") {
+                    particles = [];
+                    cloudParticles = [];
+                    accumulation.fill(0);
+                    plants = [];
+                    activeLightnings = [];
+                }
+            });
+        }
+        
+        // ====================== START ======================
+        function startSandbox() {
+            WIDTH = window.innerWidth;
+            HEIGHT = window.innerHeight;
+            canvas.width = WIDTH;
+            canvas.height = HEIGHT;
+            
+            accumulation = new Float32Array(WIDTH).fill(0);
+            plants = [];
+            cloudParticles = [];
+            activeLightnings = [];
+            
+            // Initial clouds (pixel particles)
+            for (let i = 0; i < 18; i++) {
+                cloudParticles.push({
+                    x: Math.random() * WIDTH * 1.4 - WIDTH * 0.2,
+                    y: 35 + Math.random() * 110,
+                    vx: (Math.random() - 0.5) * 2,
+                    vy: 0.3,
+                    life: 180 + Math.random() * 80,
+                    size: 7 + Math.random() * 10
+                });
+            }
+            
+            initFirebase();
+            setupUI();
+            gameLoop();
+            
+            console.log("%c✅ Pure pixel sandbox — clouds are now particles that build up with precipitation and dissolve with sun + no rain (disintegrate speed variable added & synced)", "color:#88aacc");
+        }
+        
+        window.onload = startSandbox;
+        
+        window.addEventListener("resize", () => {
+            WIDTH = window.innerWidth;
+            HEIGHT = window.innerHeight;
+            canvas.width = WIDTH;
+            canvas.height = HEIGHT;
+            accumulation = new Float32Array(WIDTH).fill(0);
+            for (let pl of plants) {
+                if (pl.x > WIDTH) pl.x = WIDTH * Math.random();
+            }
+        });
+    </script>
+</body>
+</html>
