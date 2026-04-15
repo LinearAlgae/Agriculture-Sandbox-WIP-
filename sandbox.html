@@ -1,0 +1,768 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Rain Physics Sandbox</title>
+
+<style>
+*{margin:0;padding:0;box-sizing:border-box;}
+body{background:#0a0a1f;overflow:hidden;}
+canvas{display:block;image-rendering:pixelated;}
+
+/* Control panel styles */
+.controls {
+    position: absolute;
+    top: 10px;
+    left: 10px;
+    background: rgba(0, 0, 20, 0.85);
+    padding: 15px;
+    border-radius: 12px;
+    color: white;
+    font-family: Arial, sans-serif;
+    width: 250px;
+    min-width: 80px;
+    backdrop-filter: blur(6px);
+    transition: width 0.25s ease, padding 0.25s ease;
+}
+
+.controls.collapsed {
+    width: 72px;
+    padding: 12px 10px;
+    overflow: hidden;
+}
+
+.controls.collapsed .control-group,
+.controls.collapsed .info {
+    display: none;
+}
+
+.controls.collapsed .title {
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.toggle-button {
+    position: absolute;
+    top: 10px;
+    right: 10px;
+    width: 28px;
+    height: 28px;
+    border: none;
+    border-radius: 6px;
+    background: rgba(180, 200, 255, 0.18);
+    color: #eef;
+    font-size: 16px;
+    cursor: pointer;
+    transition: background 0.2s ease;
+}
+
+.toggle-button:hover {
+    background: rgba(180, 200, 255, 0.32);
+}
+
+.control-group {
+    margin-bottom: 12px;
+}
+
+label {
+    display: block;
+    margin-bottom: 5px;
+    font-size: 14px;
+    color: #aaccff;
+}
+
+input[type="range"] {
+    width: 100%;
+    height: 5px;
+    background: #222;
+    outline: none;
+    border-radius: 5px;
+}
+
+.value-display {
+    display: inline-block;
+    width: 30px;
+    text-align: right;
+    font-size: 12px;
+    color: #aaccff;
+}
+
+.title {
+    text-align: center;
+    margin-bottom: 15px;
+    color: #aaccff;
+    font-size: 18px;
+    text-shadow: 0 0 5px rgba(100, 150, 255, 0.5);
+}
+
+.info {
+    margin-top: 15px;
+    font-size: 12px;
+    color: #88aaff;
+    line-height: 1.4;
+}
+</style>
+</head>
+
+<body>
+<canvas id="canvas"></canvas>
+
+<div class="controls">
+    <div class="title">RAIN PHYSICS SANDBOX</div>
+    <button class="toggle-button" title="Toggle controls">☰</button>
+    
+    <div class="control-group">
+        <label>
+            Precipitation: <span id="precipitation-value" class="value-display">0</span>
+        </label>
+        <input type="range" id="precipitation-intensity" min="0" max="30" value="0">
+    </div>
+    
+    <div class="control-group">
+        <label>
+            Temperature: <span id="temperature-value" class="value-display">15</span>°C
+        </label>
+        <input type="range" id="temperature-control" min="-10" max="30" value="15">
+    </div>
+    
+    <div class="info">
+        <div>• Adjust precipitation and temperature</div>
+    </div>
+</div>
+
+<script>
+// ====================== CANVAS ======================
+const canvas = document.getElementById("canvas");
+const ctx = canvas.getContext("2d");
+
+let WIDTH = window.innerWidth;
+let HEIGHT = window.innerHeight;
+canvas.width = WIDTH;
+canvas.height = HEIGHT;
+
+// ====================== WORLD ======================
+let particles = [];
+let cloudParticles = [];
+let accumulation = [];
+let iceLayer = [];
+let terrain = [];
+
+// 🌊 fluid grid
+let waterGrid = [];
+let flowGrid = [];
+
+const GRID_SIZE = 4; // resolution (lower = more accurate but slower)
+const GW = Math.floor(WIDTH / GRID_SIZE);
+const GH = Math.floor(HEIGHT / GRID_SIZE);
+
+// ====================== SETTINGS ======================
+let precipitationIntensity = 0;
+let globalTemperature = 15;
+
+let gravity = 0.25;
+let windX = 0.05;
+let windY = 0.02;
+let windTime = 0;
+
+// 🌍 physics
+let erosionRate = 0.03;
+let flowRate = 0.25;
+let evaporationRate = 0.003;
+let infiltrationRate = 0.03; // Much faster infiltration
+
+// Cloud settings
+let cloudSpawnRate = 0.4;
+let cloudClusterStrength = 0.08;
+let cloudSpeed = 0.5;
+let cloudLifeTime = 600; // frames
+let maxCloudDensity = 300; // Maximum density for cloud formation
+
+// Precipitation effect on clouds
+let precipitationEffect = 0; // Accumulated precipitation effect
+
+// Mouse interaction
+let mouseX = WIDTH / 2;
+let mouseY = HEIGHT / 4;
+let mouseDown = false;
+
+// ====================== PARTICLE CLASSES ======================
+class Particle{
+    constructor(x, y, type){
+        this.x = x; 
+        this.y = y; 
+        this.type = type;
+        this.size = type === "rain" ? 1.0 + Math.random() * 0.5 : 
+                   type === "snow" ? 1.5 + Math.random() * 1.5 : 
+                   2.5 + Math.random() * 1.5;
+        this.vx = (Math.random()-0.5)*1.5;
+        this.vy = type === "rain" ? 4 + Math.random()*4 :
+                  type === "snow" ? 1 + Math.random()*1.5 :
+                  8 + Math.random()*4;
+        this.angle = Math.random()*Math.PI*2;
+        this.life = 1.0;
+        this.drag = type === "rain" ? 0.98 : type === "snow" ? 0.995 : 0.97;
+        this.windInfluence = type === "rain" ? 0.15 : type === "snow" ? 0.08 : 0.12;
+    }
+}
+
+class CloudParticle{
+    constructor(x, y, density = 1, type = "cumulus"){
+        this.x = x;
+        this.y = y;
+        this.originalX = x;
+        this.originalY = y;
+        this.vx = (Math.random()-0.5) * cloudSpeed;
+        this.vy = (Math.random()-0.5) * cloudSpeed;
+        this.baseSize = 18 + Math.random() * 22; // Smaller base size
+        this.density = density;
+        this.maxDensity = 15 + Math.random() * 20; // Higher max density
+        this.alpha = 0.25 + Math.random() * 0.25; // Higher base alpha
+        this.clusterCount = 0;
+        this.life = Math.random() * cloudLifeTime;
+        this.oscillation = Math.random() * Math.PI * 2;
+        this.oscillationSpeed = 0.003 + Math.random() * 0.008;
+        this.color = [220 + Math.floor(Math.random() * 35), 
+                      220 + Math.floor(Math.random() * 35), 
+                      230 + Math.floor(Math.random() * 25)];
+        this.type = type; // cumulus, stratus, cumulonimbus
+        this.humidity = 0.3 + Math.random() * 0.4; // Internal humidity level
+        this.temperature = 15 + Math.random() * 10; // Cloud temperature
+        this.precipitationPotential = 0; // How likely to produce precipitation
+        
+        // Generate more complex cloud shape using noise-like patterns
+        this.generateShape();
+        this.rotation = Math.random() * Math.PI * 2;
+        this.rotationSpeed = (Math.random() - 0.5) * 0.005;
+        
+        // Cloud physics properties
+        this.updraftStrength = 0.1 + Math.random() * 0.3;
+        this.dissipationRate = 0.998 + Math.random() * 0.002;
+    }
+    
+    generateShape() {
+        this.shape = [];
+        const numParts = 12 + Math.floor(Math.random() * 8);
+        
+        for(let i = 0; i < numParts; i++) {
+            // Create irregular, billowing cloud shape
+            const angle = (i / numParts) * Math.PI * 2;
+            const radius = this.baseSize * (0.6 + Math.random() * 0.8);
+            const x = Math.cos(angle) * radius * (0.8 + Math.sin(angle * 3) * 0.3);
+            const y = Math.sin(angle) * radius * (0.7 + Math.cos(angle * 2) * 0.4);
+            
+            this.shape.push({
+                x: x,
+                y: y,
+                size: this.baseSize * (0.3 + Math.random() * 0.7),
+                density: 0.5 + Math.random() * 0.5,
+                turbulence: Math.random() * Math.PI * 2
+            });
+        }
+    }
+    
+    updatePhysics(precipitationEffect, windX, windY, globalTemperature) {
+        // Update humidity based on environmental conditions
+        this.humidity += (precipitationEffect * 0.1 - 0.02) * (0.01 + Math.random() * 0.02);
+        this.humidity = Math.max(0.1, Math.min(1.0, this.humidity));
+        
+        // Use global temperature instead of individual cloud temperature
+        this.temperature = globalTemperature + (Math.random() - 0.5) * 2; // Small variation
+        
+        // Calculate precipitation potential
+        this.precipitationPotential = Math.max(0, (this.density - 6) * this.humidity * 0.1);
+        
+        // Density changes based on humidity and temperature
+        const targetDensity = 3 + this.humidity * 8 + precipitationEffect * 3;
+        if(this.density < targetDensity) {
+            this.density += 0.05 + Math.random() * 0.1;
+        } else {
+            this.density *= this.dissipationRate;
+        }
+        
+        this.density = Math.min(this.maxDensity, Math.max(0.1, this.density));
+        
+        // Update shape turbulence
+        this.shape.forEach(part => {
+            part.turbulence += 0.02 + Math.random() * 0.03;
+            part.x += Math.sin(part.turbulence) * 0.1;
+            part.y += Math.cos(part.turbulence) * 0.08;
+        });
+        
+        // Cloud type evolution based on temperature
+        if(this.temperature < 0) {
+            this.type = "cumulonimbus";
+        } else if(this.temperature < 5) {
+            this.type = "stratus";
+        } else {
+            this.type = "cumulus";
+        }
+    }
+}
+
+// ====================== INIT ======================
+function init(){
+    accumulation = new Float32Array(WIDTH).fill(0);
+    iceLayer = new Float32Array(WIDTH).fill(0);
+    terrain = new Float32Array(WIDTH);
+    waterGrid = new Float32Array(GW * GH).fill(0);
+    flowGrid = new Float32Array(GW * GH).fill(0);
+
+    // 🌄 generate terrain
+    for(let x = 0; x < WIDTH; x++){
+        terrain[x] = Math.sin(x * 0.01) * 20 + Math.sin(x * 0.003) * 40 + 50;
+    }
+    
+    // Start with no visible clouds; clouds appear only when precipitation begins
+    cloudParticles = [];
+}
+
+// ====================== SPAWN ======================
+function spawn(type, count, x = null, y = null){
+    for(let i = 0; i < count; i++){
+        let spawnX = x || Math.random() * WIDTH;
+        let spawnY = y || 20;
+        particles.push(new Particle(spawnX, spawnY, type));
+    }
+}
+
+// ====================== CLOUD FORMATION ======================
+function updateCloudFormation() {
+    // Calculate precipitation effect based on intensity
+    precipitationEffect = precipitationIntensity * 0.1;
+    
+    // Only spawn clouds when there is precipitation pressure
+    if (precipitationIntensity <= 0) {
+        return;
+    }
+
+    let baseSpawnRate = cloudSpawnRate * (0.02 + (precipitationIntensity / 30) * 0.25);
+    if(precipitationIntensity > 10) {
+        baseSpawnRate *= 1.5;
+    }
+
+    if (Math.random() < baseSpawnRate) {
+        let cloudType = "cumulus";
+        if(globalTemperature < 5) {
+            cloudType = Math.random() < 0.7 ? "cumulonimbus" : "stratus";
+        } else if(globalTemperature < 15) {
+            cloudType = Math.random() < 0.5 ? "stratus" : "cumulus";
+        }
+
+        let spawnX, spawnY;
+        if (cloudParticles.length > 0 && Math.random() < 0.8) {
+            const parentCloud = cloudParticles[Math.floor(Math.random() * cloudParticles.length)];
+            const spawnDistance = 80 + Math.random() * 120;
+            const spawnAngle = Math.random() * Math.PI * 2;
+            spawnX = parentCloud.x + Math.cos(spawnAngle) * spawnDistance;
+            spawnY = parentCloud.y + Math.sin(spawnAngle) * spawnDistance * 0.5;
+        } else {
+            spawnX = Math.random() * WIDTH;
+            spawnY = Math.random() * HEIGHT * 0.25; // Higher in sky
+        }
+
+        const initialDensity = 1 + (precipitationIntensity / 30) * 8 + Math.random() * 3;
+        cloudParticles.push(new CloudParticle(spawnX, spawnY, initialDensity, cloudType));
+    }
+
+    const maxClouds = 220 + (precipitationIntensity / 30) * 200;
+    if (cloudParticles.length > maxClouds) {
+        cloudParticles = cloudParticles.slice(cloudParticles.length - maxClouds);
+    }
+}
+
+// ====================== CLOUD INTERACTION ======================
+function updateClouds(){
+    // Update cloud particle interactions and physics
+    for(let i = cloudParticles.length - 1; i >= 0; i--){
+        let c = cloudParticles[i];
+        
+        c.updatePhysics(precipitationEffect, windX, windY, globalTemperature);
+        
+        if (precipitationEffect <= 0) {
+            c.density *= 0.92;
+            c.humidity *= 0.98;
+            c.life -= 2;
+        }
+        
+        c.vx += windX * 0.06 + (Math.random() - 0.5) * 0.015;
+        c.vy += windY * 0.04 + (Math.random() - 0.5) * 0.008;
+        
+        c.rotation += c.rotationSpeed;
+        c.oscillation += c.oscillationSpeed;
+        c.vy += Math.sin(c.oscillation) * 0.006;
+        
+        const clusterRadius = precipitationIntensity > 15 ? 55 : 45;
+        for(let j = i + 1; j < cloudParticles.length; j++) {
+            let c2 = cloudParticles[j];
+            let dx = c.x - c2.x;
+            let dy = c.y - c2.y;
+            let dist = Math.sqrt(dx*dx + dy*dy);
+            
+            if(dist > 0 && dist < clusterRadius) {
+                let force = (clusterRadius - dist) / clusterRadius * cloudClusterStrength * (1 + precipitationEffect * 0.7);
+                if(c.type === c2.type) {
+                    force *= 1.2;
+                }
+                
+                c.vx += (dx / dist) * force;
+                c.vy += (dy / dist) * force;
+                c2.vx -= (dx / dist) * force;
+                c2.vy -= (dy / dist) * force;
+                
+                if(dist < clusterRadius * 0.7) {
+                    const densityBoost = 0.06 * (1 + (precipitationIntensity / 30));
+                    c.density = Math.min(c.maxDensity, c.density + densityBoost);
+                    c2.density = Math.min(c2.maxDensity, c2.density + densityBoost);
+                }
+            }
+        }
+        
+        if (c.precipitationPotential > 0.4 && c.density > 8 && precipitationIntensity > 0) {
+            if (Math.random() < c.precipitationPotential * 0.04) {
+                c.density -= 0.2;
+                let precipType = "rain";
+                if(c.temperature < 2) {
+                    precipType = "snow";
+                } else if(c.temperature < 6 && Math.random() < 0.5) {
+                    precipType = "hail";
+                }
+                particles.push(new Particle(c.x + (Math.random() - 0.5) * c.baseSize, 
+                                          c.y + c.baseSize * 0.8, precipType));
+            }
+        }
+        
+        c.x += c.vx;
+        c.y += c.vy;
+        
+        c.vx *= 0.985;
+        c.vy *= 0.985;
+        
+        if(c.x < -c.baseSize) c.x = WIDTH + c.baseSize;
+        if(c.x > WIDTH + c.baseSize) c.x = -c.baseSize;
+        if(c.y < -c.baseSize) c.y = HEIGHT * 0.3; // Higher boundary
+        if(c.y > HEIGHT * 0.3) c.y = -c.baseSize;
+        
+        if(c.density < 0.4 || c.life < 0) {
+            cloudParticles.splice(i, 1);
+        }
+    }
+}
+
+// ====================== PARTICLES ======================
+function updateParticles(){
+    for(let i = particles.length - 1; i >= 0; i--){
+        let p = particles[i];
+
+        // Apply wind with particle-specific influence
+        p.vx += windX * p.windInfluence;
+        p.vy += gravity;
+
+        // Snow-specific behavior: gentle swaying
+        if(p.type === "snow"){
+            p.vx += Math.sin(p.angle) * 0.8;
+            p.angle += 0.03;
+        }
+
+        // Hail-specific behavior: more erratic movement
+        if(p.type === "hail"){
+            p.vx += (Math.random() - 0.5) * 0.5;
+            p.vy += (Math.random() - 0.5) * 0.3;
+        }
+
+        // Apply drag
+        p.vx *= p.drag;
+        p.vy *= p.drag;
+
+        p.x += p.vx;
+        p.y += p.vy;
+
+        let col = Math.floor(p.x);
+        if(col < 0 || col >= WIDTH) {
+            particles.splice(i, 1);
+            continue;
+        }
+
+        let ground = HEIGHT - 40 - terrain[col] - accumulation[col] - iceLayer[col];
+
+        if(p.y >= ground){
+            if(p.type === "snow"){
+                iceLayer[col] += p.size * 0.8;
+            } else {
+                accumulation[col] += p.type === "rain" ? p.size * 0.3 : p.size * 1.2;
+
+                // add to fluid grid
+                let gx = Math.floor(p.x / GRID_SIZE);
+                let gy = Math.floor((ground) / GRID_SIZE);
+                let idx = gy * GW + gx;
+                if(idx >= 0 && idx < waterGrid.length){
+                    waterGrid[idx] += p.type === "rain" ? p.size * 0.4 : p.size * 0.8;
+                }
+            }
+
+            particles.splice(i, 1);
+            continue;
+        }
+
+        if(p.y > HEIGHT) particles.splice(i, 1);
+    }
+}
+
+// ====================== FLUID SIM ======================
+function updateFluid(){
+    let oldWater = waterGrid;
+    let newWaterGrid = new Float32Array(oldWater);
+
+    for(let y = 1; y < GH - 1; y++){
+        for(let x = 1; x < GW - 1; x++){
+            let i = y * GW + x;
+            let water = oldWater[i];
+            if(water <= 0.08) continue;
+
+            let down = (y + 1) * GW + x;
+            let left = y * GW + (x - 1);
+            let right = y * GW + (x + 1);
+            let up = (y - 1) * GW + x;
+
+            let downDiff = Math.max(0, water - oldWater[down]);
+            let leftDiff = Math.max(0, water - oldWater[left]);
+            let rightDiff = Math.max(0, water - oldWater[right]);
+            let upDiff = Math.max(0, water - oldWater[up]) * 0.3;
+
+            let flowDown = downDiff * 0.28;
+            let flowLeft = leftDiff * 0.16;
+            let flowRight = rightDiff * 0.16;
+            let flowUp = upDiff * 0.04;
+
+            let totalFlow = flowDown + flowLeft + flowRight + flowUp;
+            if(totalFlow > water * 0.9) {
+                let scale = (water * 0.9) / totalFlow;
+                flowDown *= scale;
+                flowLeft *= scale;
+                flowRight *= scale;
+                flowUp *= scale;
+            }
+
+            newWaterGrid[i] -= totalFlow;
+            newWaterGrid[down] += flowDown;
+            newWaterGrid[left] += flowLeft;
+            newWaterGrid[right] += flowRight;
+            newWaterGrid[up] += flowUp;
+
+            let evaporate = water * evaporationRate * (1 + precipitationEffect * 0.4);
+            newWaterGrid[i] -= evaporate;
+        }
+    }
+
+    waterGrid = newWaterGrid;
+}
+
+// ====================== EROSION ======================
+function updateErosion(){
+    for(let x = 1; x < WIDTH - 1; x++){
+        let gx = Math.floor(x / GRID_SIZE);
+        let gy = Math.floor((HEIGHT - 40 - terrain[x]) / GRID_SIZE);
+
+        let idx = gy * GW + gx;
+        if(idx < 0 || idx >= waterGrid.length) continue;
+
+        let water = waterGrid[idx];
+        let slope = terrain[x-1] - terrain[x+1]; // Calculate local slope
+
+        if(water > 1){
+            // Enhanced erosion based on water volume and slope
+            let erode = water * erosionRate * (1 + Math.abs(slope) * 0.1);
+
+            terrain[x] -= erode * 0.8;       // carve land
+            accumulation[x] += erode * 0.4; // sediment deposit
+            
+            // Transport sediment downhill
+            if(slope > 0 && x < WIDTH - 2) {
+                accumulation[x+1] += erode * 0.2;
+            } else if(slope < 0 && x > 1) {
+                accumulation[x-1] += erode * 0.2;
+            }
+        }
+    }
+}
+
+// ====================== GROUND ======================
+function updateGround(){
+    for(let x = 1; x < WIDTH - 1; x++){
+        let water = accumulation[x];
+        if(water > 0.02) {
+            let leftSlope = terrain[x] - terrain[x-1];
+            let rightSlope = terrain[x] - terrain[x+1];
+            let flowLeft = Math.max(0, leftSlope) * 0.04 * water;
+            let flowRight = Math.max(0, rightSlope) * 0.04 * water;
+
+            accumulation[x] -= (flowLeft + flowRight);
+            accumulation[x-1] += flowLeft;
+            accumulation[x+1] += flowRight;
+            
+            accumulation[x] -= water * infiltrationRate;
+        }
+
+        if(iceLayer[x] > 0){
+            let melt = 0.05 * iceLayer[x];
+            iceLayer[x] -= melt;
+            accumulation[x] += melt;
+        }
+    }
+}
+
+// ====================== DRAW ======================
+function draw(){
+    ctx.fillStyle = "#0a0a1f";
+    ctx.fillRect(0, 0, WIDTH, HEIGHT);
+
+    // Draw clouds in blocky pixel-style for faster rendering
+    for(const cloud of cloudParticles) {
+        if(cloud.density < 0.5) continue;
+        
+        const baseColor = cloud.color;
+        const densityFactor = Math.min(1.0, cloud.density / 8); // Lower denominator for more saturation
+        const alpha = cloud.alpha * (0.4 + densityFactor * 0.8); // Higher alpha
+        const sizeFactor = 0.9 + densityFactor * 0.6;
+        
+        for(const part of cloud.shape) {
+            const partAlpha = alpha * part.density * (0.6 + Math.sin(cloud.oscillation + part.turbulence) * 0.1);
+            if(partAlpha < 0.04) continue;
+            
+            ctx.fillStyle = `rgba(${baseColor[0]}, ${baseColor[1]}, ${baseColor[2]}, ${partAlpha.toFixed(2)})`;
+            const sx = Math.round(cloud.x + part.x * sizeFactor);
+            const sy = Math.round(cloud.y + part.y * sizeFactor);
+            const sw = Math.max(2, Math.round(part.size * sizeFactor * 0.4));
+            const sh = Math.max(2, Math.round(part.size * sizeFactor * 0.35));
+            ctx.fillRect(sx, sy, sw, sh);
+            ctx.fillRect(sx + Math.round(sw * 0.3), sy - Math.round(sh * 0.4), Math.max(1, Math.round(sw * 0.6)), Math.max(1, Math.round(sh * 0.6)));
+        }
+    }
+
+    // terrain
+    ctx.fillStyle = "#3d2c1f";
+    for(let x = 0; x < WIDTH; x++){
+        ctx.fillRect(x, HEIGHT - 40 - terrain[x], 1, terrain[x] + 40);
+    }
+
+    // water (fluid grid)
+    for(let y = 0; y < GH; y++){
+        for(let x = 0; x < GW; x++){
+            let i = y * GW + x;
+            let w = waterGrid[i];
+
+            if(w > 0.5){
+                ctx.fillStyle = `rgba(80, 140, 255, ${Math.min(1, w/5)})`;
+                ctx.fillRect(x * GRID_SIZE, y * GRID_SIZE, GRID_SIZE, GRID_SIZE);
+            }
+        }
+    }
+
+    // snow / accumulation
+    for(let x = 0; x < WIDTH; x += 2){
+        let total = accumulation[x] + iceLayer[x];
+        if(total > 0){
+            ctx.fillStyle = iceLayer[x] > 2 ? "#eef6ff" : "#ccddee";
+            ctx.fillRect(x, HEIGHT - 40 - terrain[x] - total, 2, total);
+        }
+    }
+
+    // particles
+    for(const p of particles){
+        ctx.save();
+        ctx.translate(p.x, p.y);
+        
+        if(p.type === "rain"){
+            ctx.strokeStyle = "#4488ee";
+            ctx.lineWidth = p.size * 0.5;
+            ctx.beginPath();
+            ctx.moveTo(0, 0);
+            ctx.lineTo(p.vx * -2, p.vy * -2);
+            ctx.stroke();
+        } else if(p.type === "snow"){
+            ctx.fillStyle = "#fff";
+            // Draw simple snowflake pattern
+            for(let i = 0; i < 6; i++) {
+                ctx.save();
+                ctx.rotate(i * Math.PI / 3);
+                ctx.fillRect(-p.size * 0.5, -p.size * 0.1, p.size, p.size * 0.2);
+                ctx.restore();
+            }
+        } else { // hail
+            ctx.fillStyle = "#99ddff";
+            ctx.beginPath();
+            ctx.arc(0, 0, p.size, 0, Math.PI * 2);
+            ctx.fill();
+        }
+        
+        ctx.restore();
+    }
+}
+
+// ====================== CONTROLS ======================
+document.getElementById('precipitation-intensity').addEventListener('input', (e) => {
+    precipitationIntensity = parseInt(e.target.value);
+    document.getElementById('precipitation-value').textContent = precipitationIntensity;
+});
+
+document.getElementById('temperature-control').addEventListener('input', (e) => {
+    globalTemperature = parseInt(e.target.value);
+    document.getElementById('temperature-value').textContent = globalTemperature;
+});
+const controls = document.querySelector('.controls');
+const toggleButton = document.querySelector('.toggle-button');
+toggleButton.addEventListener('click', () => {
+    controls.classList.toggle('collapsed');
+});
+// ====================== WIND SYSTEM ======================
+function updateWind(){
+    windTime += 0.01;
+    
+    // Create gentle, realistic wind patterns
+    windX = Math.sin(windTime * 0.3) * 0.08 + Math.sin(windTime * 0.7) * 0.04;
+    windY = Math.cos(windTime * 0.2) * 0.02 + Math.sin(windTime * 0.5) * 0.01;
+    
+    // Add occasional gusts
+    if(Math.random() < 0.005) {
+        windX += (Math.random() - 0.5) * 0.3;
+        windY += (Math.random() - 0.5) * 0.1;
+    }
+    
+    // Dampen extreme winds
+    windX *= 0.995;
+    windY *= 0.995;
+}
+
+// ====================== LOOP ======================
+function loop(){
+    // Update environmental systems
+    updateWind();
+    updateCloudFormation();
+
+    updateClouds();
+    updateParticles();
+    updateFluid();
+    updateErosion();
+    updateGround();
+
+    draw();
+
+    requestAnimationFrame(loop);
+}
+
+// ====================== START ======================
+init();
+loop();
+
+// resize
+window.addEventListener("resize",()=>{
+    WIDTH = window.innerWidth;
+    HEIGHT = window.innerHeight;
+    canvas.width = WIDTH;
+    canvas.height = HEIGHT;
+    init();
+});
+</script>
+</body>
+</html>
